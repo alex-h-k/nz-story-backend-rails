@@ -55,7 +55,7 @@ RSpec.describe "Trips API", type: :request do
       expect(trip.wechat_id).to     eq "alice_wx"
       expect(trip.route_mode).to    eq "preset"
       expect(trip.selected_route).to eq "alpine"
-      expect(trip.status).to        eq "waiting"
+      expect(trip.status).to eq "waiting"
     end
 
     it "auto-creates the user if the openid is new" do
