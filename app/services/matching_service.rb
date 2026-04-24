@@ -170,11 +170,11 @@ class MatchingService
     # Route score (max 35)
     overlap = route_overlap(a, b)
     score += if    overlap >= 1.0        then 35
-             elsif overlap >= 0.7        then 28
-             elsif overlap >= 0.4        then 18
-             elsif routes_adjacent?(a, b) then 10
-             else                             0
-             end
+    elsif overlap >= 0.7        then 28
+    elsif overlap >= 0.4        then 18
+    elsif routes_adjacent?(a, b) then 10
+    else                             0
+    end
 
     # Group size score (max 20)
     combined = a.group_size + b.group_size
@@ -183,18 +183,18 @@ class MatchingService
     min_pref = [ pref_a, pref_b ].min
     max_pref = [ pref_a, pref_b ].max
     score += if    combined == min_pref then 20
-             elsif combined <= min_pref then 12
-             elsif combined <= max_pref then 6
-             else                            0
-             end
+    elsif combined <= min_pref then 12
+    elsif combined <= max_pref then 6
+    else                            0
+    end
 
     # Soft preferences (max 15)
     score += 5 if age_groups_close?(a.age_group, b.age_group)
     score += 5 if companion_pref_compatible?(a, b)
     score += if a.budget && a.budget == b.budget then 5
-             elsif budget_adjacent?(a.budget, b.budget) then 2
-             else 0
-             end
+    elsif budget_adjacent?(a.budget, b.budget) then 2
+    else 0
+    end
 
     score
   end
@@ -271,10 +271,10 @@ class MatchingService
 
   def confirm_match(a, b, score, forced)
     match_type = if    score >= SCORE_IDEAL then "ideal"
-                 elsif score >= SCORE_OK    then "acceptable"
-                 elsif forced               then "forced"
-                 else                            "suggested"
-                 end
+    elsif score >= SCORE_OK    then "acceptable"
+    elsif forced               then "forced"
+    else                            "suggested"
+    end
 
     now = Time.current
 
