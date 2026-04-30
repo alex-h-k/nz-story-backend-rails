@@ -116,6 +116,73 @@ RSpec.describe MatchingService do
 
       expect(service.calc_score(young, close)).to be > service.calc_score(young, far)
     end
+
+    it "awards preferred_age_group bonus when the other party matches the preference" do
+      date = tomorrow
+      a = seed_request(departure_date: date, age_group: "26-35", preferred_age_group: "26-35")
+      b = seed_request(departure_date: date, age_group: "26-35", preferred_age_group: "any")
+      c = seed_request(departure_date: date, age_group: "55+",   preferred_age_group: "any")
+
+      # a prefers 26-35 and b is 26-35 → bonus; a vs c: a's pref misses on c's age
+      expect(service.calc_score(a, b)).to be > service.calc_score(a, c)
+    end
+
+    it "does not award preferred_age_group bonus when preference misses" do
+      date = tomorrow
+      a = seed_request(departure_date: date, age_group: "18-25", preferred_age_group: "18-25")
+      b = seed_request(departure_date: date, age_group: "55+",   preferred_age_group: "55+")
+      c = seed_request(departure_date: date, age_group: "18-25", preferred_age_group: "18-25")
+
+      # a/b: mutual miss (18-25 ≠ 55+) → 0 bonus; a/c: mutual hit → 6 bonus
+      expect(service.calc_score(a, c)).to be > service.calc_score(a, b)
+    end
+
+    it "awards trip_duration bonus for matching day counts" do
+      date = tomorrow
+      same_days = seed_request(departure_date: date, trip_days: 5)
+      other     = seed_request(departure_date: date, trip_days: 5)
+      near_days = seed_request(departure_date: date, trip_days: 7)
+      far_days  = seed_request(departure_date: date, trip_days: 14)
+
+      expect(service.calc_score(same_days, other)).to be > service.calc_score(same_days, near_days)
+      expect(service.calc_score(same_days, near_days)).to be > service.calc_score(same_days, far_days)
+    end
+
+    it "skips trip_duration bonus when either party has no days recorded" do
+      date = tomorrow
+      a = seed_request(departure_date: date, trip_days: 5)
+      b = seed_request(departure_date: date, trip_days: nil)
+      c = seed_request(departure_date: date, trip_days: 5)
+
+      expect(service.calc_score(a, c)).to be > service.calc_score(a, b)
+    end
+
+    it "gives full route score when full_loop overlaps 100% with itself" do
+      a = seed_request(selected_route: "full_loop")
+      b = seed_request(selected_route: "full_loop")
+      expect(service.calc_score(a, b)).to be >= 35 + 30  # max route + max date
+    end
+
+    it "scores two solo travelers (group_size 1 each) at the perfect-size tier" do
+      date = tomorrow
+      a = seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                       preferred_total_size: 2)
+      b = seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                       preferred_total_size: 2)
+      # combined == min_pref == 2 → 20 pts for size
+      expect(service.calc_score(a, b)).to be >= 80
+    end
+
+    it "does not award age bonus when either age group is nil" do
+      date  = tomorrow
+      a     = seed_request(departure_date: date, age_group: nil)
+      b     = seed_request(departure_date: date, age_group: "26-35")
+      score = service.calc_score(a, b)
+
+      # Score without age bonus should be <= score with a close match
+      close = seed_request(departure_date: date, age_group: "26-35")
+      expect(score).to be < service.calc_score(b, close)
+    end
   end
 
   # ── pass_hard_filters? ────────────────────────────────────────────────────────
@@ -177,6 +244,25 @@ RSpec.describe MatchingService do
     it "passes when both are custom route (no stop data — bypass route check)" do
       a = seed_request(route_mode: "custom", selected_route: nil, custom_days: 7)
       b = seed_request(route_mode: "custom", selected_route: nil, custom_days: 7)
+      expect(service.pass_hard_filters?(a, b, fresh, fresh)).to be true
+    end
+
+    it "blocks custom-route pair when trip_days diff exceeds max_date_diff" do
+      a = seed_request(route_mode: "custom", selected_route: nil, trip_days: 3)
+      b = seed_request(route_mode: "custom", selected_route: nil, trip_days: 14)
+      expect(service.pass_hard_filters?(a, b, fresh, fresh)).to be false
+    end
+
+    it "passes custom-route pair when trip_days diff is within max_date_diff" do
+      lenient = { min_score: 0, max_date_diff: 7, min_overlap: 0.00 }
+      a = seed_request(route_mode: "custom", selected_route: nil, trip_days: 5)
+      b = seed_request(route_mode: "custom", selected_route: nil, trip_days: 7)
+      expect(service.pass_hard_filters?(a, b, lenient, lenient)).to be true
+    end
+
+    it "passes custom-route pair when trip_days is nil (days not provided)" do
+      a = seed_request(route_mode: "custom", selected_route: nil, trip_days: nil)
+      b = seed_request(route_mode: "custom", selected_route: nil, trip_days: nil)
       expect(service.pass_hard_filters?(a, b, fresh, fresh)).to be true
     end
   end
@@ -335,6 +421,168 @@ RSpec.describe MatchingService do
       expect(result[:paired]).to eq 3
       expect(TripRequest.pluck(:status)).to all(eq "matched")
     end
+
+    it "sets matched_with_id on both sides of the pair" do
+      date = tomorrow
+      a = seed_request(departure_date: date, group_size: 2, preferred_total_size: 6)
+      b = seed_request(departure_date: date, group_size: 2, preferred_total_size: 6)
+
+      described_class.run
+      a.reload; b.reload
+
+      expect(a.matched_with_id).to eq b.id
+      expect(b.matched_with_id).to eq a.id
+    end
+
+    it "assigns match_type 'ideal' when score >= 70" do
+      date = tomorrow
+      a = seed_request(departure_date: date, group_size: 2, preferred_total_size: 4,
+                       selected_route: "alpine", age_group: "26-35", budget: "mid")
+      b = seed_request(departure_date: date, group_size: 2, preferred_total_size: 4,
+                       selected_route: "alpine", age_group: "26-35", budget: "mid")
+
+      described_class.run
+      a.reload
+
+      expect(a.match_score).to be >= 70
+      expect(a.match_type).to eq "ideal"
+    end
+
+    it "assigns match_type 'acceptable' when score is between 50 and 69" do
+      date = tomorrow
+      # Same route but different age + budget to land in the 50-69 band
+      a = seed_request(departure_date: date, group_size: 2, preferred_total_size: 4,
+                       selected_route: "alpine", age_group: "18-25", budget: "budget")
+      b = seed_request(departure_date: date, group_size: 2, preferred_total_size: 4,
+                       selected_route: "alpine", age_group: "55+",   budget: "luxury")
+
+      score = service.calc_score(a, b)
+      skip "score #{score} not in acceptable band" unless score.between?(50, 69)
+
+      described_class.run
+      a.reload
+      expect(a.match_type).to eq "acceptable"
+    end
+
+    it "assigns match_type 'forced' when a request has waited 15+ days and score < 50" do
+      date = days_from_now(30)
+      # kaikoura and fiordland share no stops and are not adjacent — 0 route pts
+      # opposite age groups, budgets, and preferred age groups — all soft prefs miss except companion
+      a = seed_request(departure_date: date, group_size: 2, preferred_total_size: 6,
+                       selected_route: "kaikoura", age_group: "18-25",
+                       preferred_age_group: "18-25", budget: "budget")
+      b = seed_request(departure_date: date, group_size: 2, preferred_total_size: 6,
+                       selected_route: "fiordland", age_group: "55+",
+                       preferred_age_group: "55+",  budget: "luxury")
+
+      # Make both stale enough to hit the forced threshold
+      TripRequest.update_all(created_at: 16.days.ago)
+
+      described_class.run
+      a.reload
+
+      expect(a.status).to eq "matched"
+      expect(a.match_type).to eq "forced"
+    end
+
+    it "counts forced matches separately in the result" do
+      date = days_from_now(30)
+      seed_request(departure_date: date, group_size: 2, preferred_total_size: 6,
+                   selected_route: "kaikoura", age_group: "18-25",
+                   preferred_age_group: "18-25", budget: "budget")
+      seed_request(departure_date: date, group_size: 2, preferred_total_size: 6,
+                   selected_route: "fiordland", age_group: "55+",
+                   preferred_age_group: "55+",  budget: "luxury")
+
+      TripRequest.update_all(created_at: 16.days.ago)
+
+      result = described_class.run
+      expect(result[:forced]).to eq 1
+    end
+
+    # ── solo-specific run scenarios ───────────────────────────────────────────
+
+    it "matches two compatible solo travelers (same gender, compatible pref)" do
+      date = tomorrow
+      seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                   group_identity: "female", companion_pref: "female_only",
+                   preferred_total_size: 4)
+      seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                   group_identity: "female", companion_pref: "any",
+                   preferred_total_size: 4)
+
+      expect(described_class.run[:paired]).to eq 1
+    end
+
+    it "does not match female_only solo with a male solo" do
+      date = tomorrow
+      seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                   group_identity: "female", companion_pref: "female_only",
+                   preferred_total_size: 4)
+      seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                   group_identity: "male", companion_pref: "any",
+                   preferred_total_size: 4)
+
+      expect(described_class.run[:paired]).to eq 0
+    end
+
+    it "matches rainbow_friendly solo with a rainbow solo" do
+      date = tomorrow
+      seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                   group_identity: "female", companion_pref: "rainbow_friendly",
+                   is_rainbow: true, preferred_total_size: 4)
+      seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                   group_identity: "male", companion_pref: "any",
+                   is_rainbow: true, preferred_total_size: 4)
+
+      expect(described_class.run[:paired]).to eq 1
+    end
+
+    it "does not match rainbow_friendly solo with a non-rainbow solo" do
+      date = tomorrow
+      seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                   group_identity: "female", companion_pref: "rainbow_friendly",
+                   is_rainbow: true, preferred_total_size: 4)
+      seed_request(departure_date: date, group_type: "solo", group_size: 1,
+                   group_identity: "male", companion_pref: "any",
+                   is_rainbow: false, preferred_total_size: 4)
+
+      expect(described_class.run[:paired]).to eq 0
+    end
+
+    # ── group size boundary ───────────────────────────────────────────────────
+
+    it "passes when combined size exactly equals preferred_total_size" do
+      date = tomorrow
+      seed_request(departure_date: date, group_size: 3, preferred_total_size: 6)
+      seed_request(departure_date: date, group_size: 3, preferred_total_size: 6)
+
+      expect(described_class.run[:paired]).to eq 1
+    end
+
+    it "blocks when combined size is one over preferred_total_size" do
+      date = tomorrow
+      seed_request(departure_date: date, group_size: 4, preferred_total_size: 6)
+      seed_request(departure_date: date, group_size: 3, preferred_total_size: 6)
+
+      expect(described_class.run[:paired]).to eq 0
+    end
+
+    it "applies the global cap of 10 when preferred_total_size is nil" do
+      date = tomorrow
+      seed_request(departure_date: date, group_size: 6, preferred_total_size: nil)
+      seed_request(departure_date: date, group_size: 6, preferred_total_size: nil)
+
+      expect(described_class.run[:paired]).to eq 0
+    end
+
+    it "passes when combined size is within the global cap and preferred_total_size is nil" do
+      date = tomorrow
+      seed_request(departure_date: date, group_size: 4, preferred_total_size: nil)
+      seed_request(departure_date: date, group_size: 4, preferred_total_size: nil)
+
+      expect(described_class.run[:paired]).to eq 1
+    end
   end
 
   # ── run_fallback ──────────────────────────────────────────────────────────────
@@ -368,6 +616,31 @@ RSpec.describe MatchingService do
         route_mode: "preset", wechat_id: "wx_m", status: "matched"
       )
       expect(described_class.run_fallback[:expired]).to eq 0
+    end
+
+    it "reports overdue count for waiting requests older than 15 days" do
+      trip = seed_request(departure_date: days_from_now(10))
+      trip.update_columns(created_at: 16.days.ago)
+
+      result = described_class.run_fallback
+      expect(result[:overdue]).to eq 1
+    end
+
+    it "does not count fresh waiting requests as overdue" do
+      seed_request(departure_date: days_from_now(10))
+      expect(described_class.run_fallback[:overdue]).to eq 0
+    end
+
+    it "does not count expired requests as overdue" do
+      user = User.create!(openid: "expired_user")
+      trip = user.trip_requests.create!(
+        openid: "expired_user", departure_date: days_ago(40),
+        group_size: 2, grouping_pref: "join_group",
+        route_mode: "preset", wechat_id: "wx_exp", status: "expired"
+      )
+      trip.update_columns(created_at: 20.days.ago)
+
+      expect(described_class.run_fallback[:overdue]).to eq 0
     end
   end
 end

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_04_24_000000) do
+ActiveRecord::Schema[8.1].define(version: 2026_04_30_000000) do
   create_table "trip_requests", force: :cascade do |t|
     t.string "age_group"
     t.string "budget"
@@ -36,6 +36,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_04_24_000000) do
     t.string "route_mode", null: false
     t.string "selected_route"
     t.string "status", default: "waiting", null: false
+    t.integer "trip_days"
     t.datetime "updated_at", null: false
     t.integer "user_id", null: false
     t.string "wechat_id", null: false
