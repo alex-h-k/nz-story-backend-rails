@@ -25,6 +25,7 @@ module Api
           route_mode:          t[:routeMode].presence || "preset",
           selected_route:      t[:selectedRoute].presence,
           custom_days:         t[:customDays].presence&.to_i,
+          trip_days:           (t[:presetDays] || t[:customDays]).presence&.to_i,
           group_identity:      t[:groupIdentity].presence,
           companion_pref:      t[:companionPref].presence,
           age_group:           t[:ageGroup].presence,

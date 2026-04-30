@@ -117,6 +117,46 @@ RSpec.describe MatchingService do
       expect(service.calc_score(young, close)).to be > service.calc_score(young, far)
     end
 
+    it "awards preferred_age_group bonus when the other party matches the preference" do
+      date = tomorrow
+      a = seed_request(departure_date: date, age_group: "26-35", preferred_age_group: "26-35")
+      b = seed_request(departure_date: date, age_group: "26-35", preferred_age_group: "any")
+      c = seed_request(departure_date: date, age_group: "55+",   preferred_age_group: "any")
+
+      # a prefers 26-35 and b is 26-35 → bonus; a vs c: a's pref misses on c's age
+      expect(service.calc_score(a, b)).to be > service.calc_score(a, c)
+    end
+
+    it "does not award preferred_age_group bonus when preference misses" do
+      date = tomorrow
+      a = seed_request(departure_date: date, age_group: "18-25", preferred_age_group: "18-25")
+      b = seed_request(departure_date: date, age_group: "55+",   preferred_age_group: "55+")
+      c = seed_request(departure_date: date, age_group: "18-25", preferred_age_group: "18-25")
+
+      # a/b: mutual miss (18-25 ≠ 55+) → 0 bonus; a/c: mutual hit → 6 bonus
+      expect(service.calc_score(a, c)).to be > service.calc_score(a, b)
+    end
+
+    it "awards trip_duration bonus for matching day counts" do
+      date = tomorrow
+      same_days = seed_request(departure_date: date, trip_days: 5)
+      other     = seed_request(departure_date: date, trip_days: 5)
+      near_days = seed_request(departure_date: date, trip_days: 7)
+      far_days  = seed_request(departure_date: date, trip_days: 14)
+
+      expect(service.calc_score(same_days, other)).to be > service.calc_score(same_days, near_days)
+      expect(service.calc_score(same_days, near_days)).to be > service.calc_score(same_days, far_days)
+    end
+
+    it "skips trip_duration bonus when either party has no days recorded" do
+      date = tomorrow
+      a = seed_request(departure_date: date, trip_days: 5)
+      b = seed_request(departure_date: date, trip_days: nil)
+      c = seed_request(departure_date: date, trip_days: 5)
+
+      expect(service.calc_score(a, c)).to be > service.calc_score(a, b)
+    end
+
     it "gives full route score when full_loop overlaps 100% with itself" do
       a = seed_request(selected_route: "full_loop")
       b = seed_request(selected_route: "full_loop")
@@ -204,6 +244,25 @@ RSpec.describe MatchingService do
     it "passes when both are custom route (no stop data — bypass route check)" do
       a = seed_request(route_mode: "custom", selected_route: nil, custom_days: 7)
       b = seed_request(route_mode: "custom", selected_route: nil, custom_days: 7)
+      expect(service.pass_hard_filters?(a, b, fresh, fresh)).to be true
+    end
+
+    it "blocks custom-route pair when trip_days diff exceeds max_date_diff" do
+      a = seed_request(route_mode: "custom", selected_route: nil, trip_days: 3)
+      b = seed_request(route_mode: "custom", selected_route: nil, trip_days: 14)
+      expect(service.pass_hard_filters?(a, b, fresh, fresh)).to be false
+    end
+
+    it "passes custom-route pair when trip_days diff is within max_date_diff" do
+      lenient = { min_score: 0, max_date_diff: 7, min_overlap: 0.00 }
+      a = seed_request(route_mode: "custom", selected_route: nil, trip_days: 5)
+      b = seed_request(route_mode: "custom", selected_route: nil, trip_days: 7)
+      expect(service.pass_hard_filters?(a, b, lenient, lenient)).to be true
+    end
+
+    it "passes custom-route pair when trip_days is nil (days not provided)" do
+      a = seed_request(route_mode: "custom", selected_route: nil, trip_days: nil)
+      b = seed_request(route_mode: "custom", selected_route: nil, trip_days: nil)
       expect(service.pass_hard_filters?(a, b, fresh, fresh)).to be true
     end
   end
@@ -407,10 +466,14 @@ RSpec.describe MatchingService do
 
     it "assigns match_type 'forced' when a request has waited 15+ days and score < 50" do
       date = days_from_now(30)
+      # kaikoura and fiordland share no stops and are not adjacent — 0 route pts
+      # opposite age groups, budgets, and preferred age groups — all soft prefs miss except companion
       a = seed_request(departure_date: date, group_size: 2, preferred_total_size: 6,
-                       selected_route: "alpine",    age_group: "18-25", budget: "budget")
+                       selected_route: "kaikoura", age_group: "18-25",
+                       preferred_age_group: "18-25", budget: "budget")
       b = seed_request(departure_date: date, group_size: 2, preferred_total_size: 6,
-                       selected_route: "kaikoura",  age_group: "55+",   budget: "luxury")
+                       selected_route: "fiordland", age_group: "55+",
+                       preferred_age_group: "55+",  budget: "luxury")
 
       # Make both stale enough to hit the forced threshold
       TripRequest.update_all(created_at: 16.days.ago)
@@ -425,9 +488,11 @@ RSpec.describe MatchingService do
     it "counts forced matches separately in the result" do
       date = days_from_now(30)
       seed_request(departure_date: date, group_size: 2, preferred_total_size: 6,
-                   selected_route: "alpine",   age_group: "18-25", budget: "budget")
+                   selected_route: "kaikoura", age_group: "18-25",
+                   preferred_age_group: "18-25", budget: "budget")
       seed_request(departure_date: date, group_size: 2, preferred_total_size: 6,
-                   selected_route: "kaikoura", age_group: "55+",   budget: "luxury")
+                   selected_route: "fiordland", age_group: "55+",
+                   preferred_age_group: "55+",  budget: "luxury")
 
       TripRequest.update_all(created_at: 16.days.ago)
 

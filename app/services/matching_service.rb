@@ -148,10 +148,15 @@ class MatchingService
     size_limit = [ a.preferred_total_size || 10, b.preferred_total_size || 10, 10 ].min
     return false if combined > size_limit
 
-    overlap    = route_overlap(a, b)
-    adjacent   = routes_adjacent?(a, b)
+    overlap     = route_overlap(a, b)
+    adjacent    = routes_adjacent?(a, b)
     both_custom = a.route_mode == "custom" && b.route_mode == "custom"
     return false if !both_custom && overlap < min_overlap && !adjacent
+
+    # For custom-route pairs, use trip_days diff as a proxy when both provided it
+    if both_custom && a.trip_days && b.trip_days
+      return false if (a.trip_days - b.trip_days).abs > max_date_diff
+    end
 
     return false unless companion_pref_compatible?(a, b)
 
@@ -188,13 +193,21 @@ class MatchingService
     else                            0
     end
 
-    # Soft preferences (max 15)
+    # Soft preferences (max 15 + up to 6 for preferred age group)
     score += 5 if age_groups_close?(a.age_group, b.age_group)
     score += 5 if companion_pref_compatible?(a, b)
     score += if a.budget && a.budget == b.budget then 5
     elsif budget_adjacent?(a.budget, b.budget) then 2
     else 0
     end
+
+    # Preferred age group bonus: +3 each way when the other party's age falls
+    # within the requester's stated preference (or preference is 'any')
+    score += 3 if preferred_age_satisfied?(a.preferred_age_group, b.age_group)
+    score += 3 if preferred_age_satisfied?(b.preferred_age_group, a.age_group)
+
+    # Trip duration bonus (max 5): rewards similar trip lengths
+    score += trip_duration_score(a.trip_days, b.trip_days)
 
     score
   end
@@ -258,6 +271,20 @@ class MatchingService
     ib = age_group_index(gb)
     return false if ia.nil? || ib.nil?
     (ia - ib).abs <= 1
+  end
+
+  def trip_duration_score(days_a, days_b)
+    return 0 if days_a.nil? || days_b.nil?
+    diff = (days_a - days_b).abs
+    if    diff == 0 then 5
+    elsif diff <= 2  then 3
+    else                  0
+    end
+  end
+
+  def preferred_age_satisfied?(pref, actual_age_group)
+    return true if pref.nil? || pref == "any"
+    age_groups_close?(pref, actual_age_group)
   end
 
   def budget_adjacent?(ba, bb)
